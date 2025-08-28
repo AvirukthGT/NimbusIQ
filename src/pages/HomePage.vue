@@ -319,5 +319,39 @@ onBeforeUnmount(() => cancelAnimationFrame(rafId))
 .forecast-skel{ display:grid; grid-template-columns:repeat(7,1fr); gap:12px }
 .forecast-skel .day{ height:96px; border-radius:12px }
 
+/* --- Current card fixes (paste after your existing styles) --- */
+
+/* Make the stats grid auto-fit into comfortably wide pills */
+.current .stats{
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+/* Force proper spacing inside each pill */
+.current .stat{
+  display: flex !important;          /* ensure flex wins over any global styles */
+  align-items: center;
+  gap: 10px;                         /* visible gap even if content is short */
+}
+
+/* Push the value to the right and keep it on one line */
+.current .stat strong{
+  margin-left: auto;                 /* creates space between label and value */
+  white-space: nowrap;               /* prevents "16 km/h" breaking */
+}
+
+/* Let longer labels wrap softly without squashing the value */
+.current .stat span{
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Keep the timezone from exploding layout but allow a fuller preview */
+.current .truncate{
+  max-width: 420px;                  /* wider before ellipsis on desktop */
+}
+@media (max-width: 760px){
+  .current .truncate{ max-width: 260px; }
+}
 
 </style>
