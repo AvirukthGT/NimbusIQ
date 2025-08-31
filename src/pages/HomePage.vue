@@ -8,6 +8,12 @@ const error = ref('')
 const current = ref(null)
 const forecast = ref(null)
 
+/* --- Geolocation state --- */
+const geo = ref({
+  state: 'idle',    // 'idle' | 'prompt' | 'granted' | 'denied' | 'error'
+  msg: ''
+})
+
 async function load () {
   try {
     loading.value = true; error.value = ''
@@ -19,6 +25,60 @@ async function load () {
     error.value = e.message || 'Failed to load'
   } finally {
     loading.value = false
+  }
+}
+
+/* Ask for and use browser location */
+function useMyLocation () {
+  if (!('geolocation' in navigator)) {
+    geo.value = { state: 'error', msg: 'Geolocation not supported on this device/browser.' }
+    return
+  }
+  geo.value = { state: 'prompt', msg: '' } // while waiting
+  navigator.geolocation.getCurrentPosition(
+    pos => {
+      const { latitude, longitude } = pos.coords
+      geo.value = { state: 'granted', msg: '' }
+      // WeatherAPI accepts "lat,lon" strings
+      query.value = `${latitude.toFixed(4)},${longitude.toFixed(4)}`
+      load()
+    },
+    err => {
+      const reason =
+        err.code === 1 ? 'Permission denied.' :
+        err.code === 2 ? 'Position unavailable.' :
+        err.code === 3 ? 'Timed out.' : 'Unable to get your location.'
+      geo.value = { state: (err.code === 1 ? 'denied' : 'error'), msg: reason }
+    },
+    { enableHighAccuracy: false, maximumAge: 5 * 60 * 1000, timeout: 8000 }
+  )
+}
+
+/* Check existing permission (if supported) so we can auto-use location */
+async function checkGeoPermissionAndMaybeAutoload () {
+  try {
+    if (!('permissions' in navigator) || !navigator.permissions.query) {
+      // No Permissions API → just show the CTA; do not auto prompt
+      geo.value = { state: 'prompt', msg: '' }
+      return
+    }
+    const status = await navigator.permissions.query({ name: 'geolocation' })
+    if (status.state === 'granted') {
+      geo.value = { state: 'granted', msg: '' }
+      useMyLocation()
+    } else if (status.state === 'prompt') {
+      geo.value = { state: 'prompt', msg: '' }
+    } else {
+      geo.value = { state: 'denied', msg: 'Location permission previously denied.' }
+    }
+    // Keep geo.state in sync if user changes it in browser UI
+    status.onchange = () => {
+      if (status.state === 'granted') { geo.value.state = 'granted'; useMyLocation() }
+      else if (status.state === 'prompt') { geo.value.state = 'prompt' }
+      else { geo.value.state = 'denied' }
+    }
+  } catch {
+    geo.value = { state: 'prompt', msg: '' }
   }
 }
 
@@ -53,7 +113,7 @@ function initStars () {
   draw()
 }
 
-onMounted(() => { load(); initStars() })
+onMounted(() => { load(); checkGeoPermissionAndMaybeAutoload(); initStars() })
 onBeforeUnmount(() => cancelAnimationFrame(rafId))
 </script>
 
@@ -71,11 +131,28 @@ onBeforeUnmount(() => cancelAnimationFrame(rafId))
         <h1 class="title">Weather, distilled.</h1>
         <p class="subtitle">Clean insights — timezone-aware, AQI-aware, alert-ready.</p>
 
+        <!-- Location CTA -->
+        <div
+          v-if="geo.state === 'prompt'"
+          class="geo-cta"
+          role="region"
+          aria-live="polite"
+        >
+          <span>Want local weather?</span>
+          <button class="ghost" @click="useMyLocation">Use my location</button>
+        </div>
+        <div v-else-if="geo.state === 'denied' || geo.state === 'error'" class="geo-note">
+          {{ geo.msg || 'Location access is off. You can still search any place.' }}
+        </div>
+
         <div class="search">
           <input v-model="query" @keyup.enter="load" class="search-input"
                  placeholder="Search city or lat,long (e.g. -37.8136,144.9631)" />
           <button class="search-btn" :disabled="loading" @click="load">
             <span>{{ loading ? 'Loading…' : 'Search' }}</span><i class="pulse"></i>
+          </button>
+          <button class="loc-btn" :disabled="loading" @click="useMyLocation" title="Use my current location">
+            📍
           </button>
         </div>
         <div class="base">Base: http://api.weatherapi.com/v1</div>
@@ -93,7 +170,6 @@ onBeforeUnmount(() => cancelAnimationFrame(rafId))
             <div class="head">
               <h2 class="card-title truncate">{{ place }}</h2>
               <span class="chip nowrap">{{ current.current.condition.text }}</span>
-
             </div>
 
             <div class="temp-line">
@@ -129,7 +205,6 @@ onBeforeUnmount(() => cancelAnimationFrame(rafId))
               <div class="date">{{ d.date }}</div>
               <div class="max">{{ Math.round(d.day.maxtemp_c) }}°</div>
               <div class="cond truncate" :title="d.day.condition.text">{{ d.day.condition.text }}</div>
-
               <div class="rain">Rain {{ Math.round(d.day.daily_chance_of_rain) }}%</div>
             </div>
           </div>
@@ -215,8 +290,24 @@ onBeforeUnmount(() => cancelAnimationFrame(rafId))
 .title{ font-size:3.4rem; line-height:1.1; margin:0 }
 .subtitle{ color:var(--muted); margin:.8rem 0 1.6rem; font-size:1.05rem }
 
+/* --- Geolocation CTA and notes --- */
+.geo-cta{
+  display:inline-flex; gap:12px; align-items:center; justify-content:center;
+  padding:10px 14px; border-radius:14px;
+  background:rgba(37,194,246,.08); border:1px solid rgba(37,194,246,.35);
+  margin: 0 auto 12px; color:var(--ink)
+}
+.geo-note{
+  margin: 0 auto 12px; color: var(--muted)
+}
+.ghost{
+  background: transparent; border: 1px solid rgba(255,255,255,.35);
+  padding: 8px 12px; border-radius: 12px; cursor: pointer; color: var(--ink)
+}
+.ghost:hover{ border-color: rgba(255,255,255,.6) }
+
 /* ---------- search ---------- */
-.search{ display:flex; gap:12px; justify-content:center; align-items:center; margin-top:.4rem }
+.search{ display:flex; gap:12px; justify-content:center; align-items:center; margin-top:.4rem; flex-wrap:wrap }
 .search-input{
   width:min(760px,100%); padding:16px 18px; border-radius:16px;
   background:rgba(255,255,255,.06);
@@ -237,10 +328,17 @@ onBeforeUnmount(() => cancelAnimationFrame(rafId))
 @keyframes pulse{ 0%,100%{transform:translateX(-10%)} 50%{transform:translateX(40%)} }
 .base{ margin-top:10px; font-size:.9rem; color:var(--muted) }
 
+/* Quick icon button for location */
+.loc-btn{
+  border:1px solid var(--panel-border); background: rgba(255,255,255,.06);
+  color: var(--ink); padding: 12px 14px; border-radius: 14px; cursor: pointer
+}
+.loc-btn:hover{ background: rgba(255,255,255,.08) }
+
 /* ---------- grid cards ---------- */
 .grid{
   display:grid; gap:28px; position:relative; z-index:3;
-  grid-template-columns: 1fr;                 /* single column on mobile */
+  grid-template-columns: 1fr;
 }
 @media(min-width:980px){
   .grid{ grid-template-columns: 1.05fr 1.6fr }
@@ -251,7 +349,7 @@ onBeforeUnmount(() => cancelAnimationFrame(rafId))
   background: var(--panel);
   border: 1px solid var(--panel-border);
   border-radius: var(--radius);
-  padding: 24px;                               /* more padding */
+  padding: 24px;
   backdrop-filter: var(--blur);
   box-shadow: 0 22px 64px rgba(0,0,0,.42);
   transform: translateY(0);
@@ -269,7 +367,7 @@ onBeforeUnmount(() => cancelAnimationFrame(rafId))
 
 /* ---------- current card ---------- */
 .current .head{ display:flex; align-items:center; justify-content:space-between; gap:16px }
-.current .head .chip{ white-space:nowrap }     /* prevent wrap */
+.current .head .chip{ white-space:nowrap }
 .temp-line{ display:flex; align-items:baseline; gap:22px; margin:12px 0 14px }
 .temp{ font-size:3.6rem; font-weight:800; letter-spacing:-.5px; line-height:1 }
 .feels{ color:var(--muted) }
@@ -287,27 +385,27 @@ onBeforeUnmount(() => cancelAnimationFrame(rafId))
   padding:12px 14px; background:rgba(255,255,255,.05);
   border:1px solid var(--panel-border); border-radius: var(--radius-sm)
 }
-.stat strong{ white-space:nowrap }             /* keep figures on one line */
+.stat strong{ white-space:nowrap }
 .stat.wide{ grid-column: span 2 }
 
 /* ---------- forecast ---------- */
 .rowtop{ display:flex; align-items:center; justify-content:space-between; margin-bottom:10px }
 .forecast-grid{
   display:grid; gap:14px;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); /* auto-fit with min width */
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
 }
 .day{
   text-align:center; padding:14px; border-radius:14px; background:rgba(255,255,255,.05);
   border:1px solid var(--panel-border);
   transition: transform .18s, box-shadow .18s, background .2s;
   box-shadow: 0 8px 24px rgba(0,0,0,.25);
-  min-height: 168px;                            /* taller to avoid wrap */
+  min-height: 168px;
 }
 .day:hover{ transform:translateY(-3px) scale(1.02); background:rgba(255,255,255,.065) }
 .date{ font-size:.8rem; color:var(--muted) }
 .max{ font-size:1.6rem; font-weight:800; margin-top:4px }
 .cond{ font-size:.95rem; margin-top:4px; }
-.cond.truncate{ display:block }                /* reuse ellipsis utility */
+.cond.truncate{ display:block }
 .rain{ font-size:.8rem; color:var(--muted); margin-top:6px }
 
 /* ---------- alerts + skeletons ---------- */
@@ -319,39 +417,11 @@ onBeforeUnmount(() => cancelAnimationFrame(rafId))
 .forecast-skel{ display:grid; grid-template-columns:repeat(7,1fr); gap:12px }
 .forecast-skel .day{ height:96px; border-radius:12px }
 
-/* --- Current card fixes (paste after your existing styles) --- */
-
-/* Make the stats grid auto-fit into comfortably wide pills */
-.current .stats{
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 14px;
-}
-
-/* Force proper spacing inside each pill */
-.current .stat{
-  display: flex !important;          /* ensure flex wins over any global styles */
-  align-items: center;
-  gap: 10px;                         /* visible gap even if content is short */
-}
-
-/* Push the value to the right and keep it on one line */
-.current .stat strong{
-  margin-left: auto;                 /* creates space between label and value */
-  white-space: nowrap;               /* prevents "16 km/h" breaking */
-}
-
-/* Let longer labels wrap softly without squashing the value */
-.current .stat span{
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* Keep the timezone from exploding layout but allow a fuller preview */
-.current .truncate{
-  max-width: 420px;                  /* wider before ellipsis on desktop */
-}
-@media (max-width: 760px){
-  .current .truncate{ max-width: 260px; }
-}
-
+/* --- Current card fixes --- */
+.current .stats{ grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+.current .stat{ display: flex !important; align-items: center; gap: 10px; }
+.current .stat strong{ margin-left: auto; white-space: nowrap; }
+.current .stat span{ overflow: hidden; text-overflow: ellipsis; }
+.current .truncate{ max-width: 420px; }
+@media (max-width: 760px){ .current .truncate{ max-width: 260px; } }
 </style>
